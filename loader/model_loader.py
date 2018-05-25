@@ -2,6 +2,14 @@ import settings
 import torch
 import torchvision
 
+def getModule(model, name):
+    if len(name.split('.')) == 1:
+        m = model._modules.get(name)
+    else:
+        name, id = name.split('.')
+        m = model._modules.get(name)[int(id)]
+    return m
+    
 def loadmodel(hook_fn):
     if settings.MODEL_FILE is None:
         model = torchvision.models.__dict__[settings.MODEL](pretrained=True)
@@ -18,7 +26,8 @@ def loadmodel(hook_fn):
         else:
             model = checkpoint
     for name in settings.FEATURE_NAMES:
-        model._modules.get(name).register_forward_hook(hook_fn)
+        m = getModule(model, name)
+        m.register_forward_hook(hook_fn)
     if settings.GPU:
         model.cuda()
     model.eval()

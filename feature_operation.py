@@ -1,5 +1,4 @@
-
-import os
+import os, cv2, math
 from torch.autograd import Variable as V
 from scipy.misc import imresize
 import numpy as np
@@ -8,14 +7,113 @@ import settings
 import time
 import util.upsample as upsample
 import util.vecquantile as vecquantile
+from util.utility import slide2d, slide2d_tensor, convert_image_np, convert_np2var, bilinear_resize
 import multiprocessing.pool as pool
 from loader.data_loader import load_csv
 from loader.data_loader import SegmentationData, SegmentationPrefetcher
+from loader.model_loader import getModule
 
 features_blobs = []
 def hook_feature(module, input, output):
     features_blobs.append(output.data.cpu().numpy())
 
+def hook_inputconv_feature(module, input, output):
+    # record last output
+    module.output = output.data.cpu().numpy()
+
+def fcn_forward(model, inp_var, feature_names=None,
+                size=5, receptive_field=None): 
+    # use for fully connected layers, assumes 4d image
+    '''feature_names: layers to record heatmap
+       inp_var: image in pytorch format of shape (bs, c, w, h)
+       # im_np: image in numpy format of shape (bs, c, w, h)
+       return: a list of heatmaps in the same order as feature_names'''
+    heatmap_list = []
+    
+    # register names
+    if feature_names is None:
+        feature_names = settings.FEATURE_NAMES
+        for name in feature_names:
+            m = getModule(model, name)
+            m.register_forward_hook(hook_inputconv_feature)
+    # determine receptive_field
+    if receptive_field is None:
+        receptive_field = settings.RF
+    
+    # prepare slide2d
+    bs, c, w, h = inp_var.shape
+    # todo: inefficient one pass is enough for all layers
+    for name in feature_names:
+
+        def CAM(inp):
+            # change receptive_field to size (w,h) of CAM to kernel size, inp is a pytorch variable
+            bs, c, w_in, h_in  = inp.shape
+            # use pytorch bilinear interpolation, also only resize if needed
+            if w_in != w or h_in != h:
+                inp = bilinear_resize(inp, h, w)
+            
+            out = model(inp) # doesn't need out
+            m = getModule(model, name)
+            out = m.output
+            if len(out.shape) > 1: # assumes have batch information
+                out = out.reshape(out.shape[0], -1)
+            return out
+        
+        heatmap = slide2d_tensor(inp_var, (receptive_field, receptive_field), 
+                                 pad=math.ceil((receptive_field-1)/2), 
+                                 stride=math.floor((w-1)/size), 
+                                 transform=CAM)
+
+        heatmap_list.append(heatmap)
+    
+    return heatmap_list
+
+def forward_slide2d(model, im_np, feature_names=None,
+                    size=5, receptive_field=100, pytorch_order=True): 
+    # use for fully connected layers, assumes 4d image
+    '''feature_names: layers to record heatmap
+       im_np: image in numpy format of shape (bs, w, h, c)
+       return: a list of heatmaps in the same order as feature_names'''
+    heatmap_list = []
+    
+    # register names
+    if feature_names is None:
+        feature_names = settings.FEATURE_NAMES
+        for name in feature_names:
+            m = getModule(model, name)
+            m.register_forward_hook(hook_inputconv_feature)
+    
+    # prepare slide2d
+    bs, w, h, c = im_np.shape
+    # todo: inefficient one pass is enough for all layers
+    for name in feature_names:
+
+        def CAM(inp):
+            # change receptive_field to size (w,h) of CAM to kernel size
+            bs, w_in, h_in, c = inp.shape
+            inp = cv2.resize(inp.reshape([w_in, h_in, bs*c]), (w,h))
+            inp = inp.reshape([bs,w,h,c])
+            
+            prep_img = convert_np2var(inp).cuda() # todo: inefficient, should always just do slide2d in pytorch
+            out = model(prep_img)
+            m = getModule(model, name)
+            out = m.output
+            if len(out.shape) > 1: 
+                if len(prep_img.shape) == 3: # no batch
+                    out = out.ravel()
+                else: # has batch
+                    out = out.reshape(out.shape[0], -1)
+            return out
+        
+        heatmap = slide2d(im_np, (receptive_field, receptive_field), 
+                          pad=math.ceil((receptive_field-1)/2), 
+                          stride=math.floor((w-1)/size), 
+                          transform=CAM)
+        if pytorch_order:
+            heatmap = heatmap.transpose((0,3,1,2)) # (bs, c, w, h)
+        heatmap_list.append(heatmap)
+    
+    return heatmap_list
 
 class FeatureOperator:
 
@@ -30,8 +128,8 @@ class FeatureOperator:
         loader = self.loader
         # extract the max value activaiton for each image
         maxfeatures = [None] * len(settings.FEATURE_NAMES)
-        wholefeatures = [None] * len(settings.FEATURE_NAMES)
-        features_size = [None] * len(settings.FEATURE_NAMES)
+        wholefeatures = [None] * len(settings.FEATURE_NAMES) 
+        features_size = [None] * len(settings.FEATURE_NAMES) 
         features_size_file = os.path.join(settings.OUTPUT_FOLDER, "feature_size.npy")
 
         if memmap:
@@ -55,28 +153,45 @@ class FeatureOperator:
 
         num_batches = (len(loader.indexes) + loader.batch_size - 1) / loader.batch_size
         for batch_idx,batch in enumerate(loader.tensor_batches(bgr_mean=self.mean)):
-            del features_blobs[:]
+            del features_blobs[:] # clear all content of feature blob
             input = batch[0]
             batch_size = len(input)
             print('extracting feature from batch %d / %d' % (batch_idx+1, num_batches))
-            input = torch.from_numpy(input[:, ::-1, :, :].copy())
+            input = torch.from_numpy(input[:, ::-1, :, :].copy()) # authors: todo preprocess input
             input.div_(255.0 * 0.224)
             if settings.GPU:
                 input = input.cuda()
             input_var = V(input,volatile=True)
+
             logit = model.forward(input_var)
+            # create 13x13 forward operations
+            if settings.INPUT_CONV:
+                # todo: check if need deep copy
+                features_blobs.extend(fcn_forward(model, input_var))                                    
+                # im_np = convert_image_np(input_var.data)
+                # features_blobs.extend(forward_slide2d(model, im_np))
+            
             while np.isnan(logit.data.max()):
-                print("nan") #which I have no idea why it will happen
+                print("nan") #which I have no idea why it will happen (this is author's note)
                 del features_blobs[:]
                 logit = model.forward(input_var)
+                # create 13x13 forward operations
+                if settings.INPUT_CONV:
+                    # todo: check if need deep copy
+                    features_blobs.extend(fcn_forward(model, input_var))                    
+                    # im_np = convert_image_np(input_var.data)
+                    # features_blobs.extend(forward_slide2d(model, im_np))
+                
             if maxfeatures[0] is None:
                 # initialize the feature variable
                 for i, feat_batch in enumerate(features_blobs):
                     size_features = (len(loader.indexes), feat_batch.shape[1])
+                    #print(size_features, feat_batch.shape) # 128, 256, 6, 6
                     if memmap:
                         maxfeatures[i] = np.memmap(mmap_max_files[i],dtype=float,mode='w+',shape=size_features)
                     else:
                         maxfeatures[i] = np.zeros(size_features)
+                        
             if len(feat_batch.shape) == 4 and wholefeatures[0] is None:
                 # initialize the feature variable
                 for i, feat_batch in enumerate(features_blobs):
@@ -171,7 +286,7 @@ class FeatureOperator:
                 for unit_id in range(units):
                     feature_map = features[img_index][unit_id]
                     if feature_map.max() > threshold[unit_id]:
-                        mask = imresize(feature_map, (concept_map['sh'], concept_map['sw']), mode='F')
+                        mask = imresize(feature_map, (concept_map['sh'], concept_map['sw']), mode='F') # 32 bit floating point pixel
                         #reduction = int(round(settings.IMG_SIZE / float(concept_map['sh'])))
                         #mask = upsample.upsampleL(fieldmap, feature_map, shape=(concept_map['sh'], concept_map['sw']), reduction=reduction)
                         indexes = np.argwhere(mask > threshold[unit_id])

@@ -1,11 +1,15 @@
 import settings
 from loader.model_loader import loadmodel
-from feature_operation import hook_feature,FeatureOperator
+from feature_operation import hook_feature, hook_inputconv_feature, FeatureOperator
 from visualize.report import generate_html_summary
 from util.clean import clean
 
 fo = FeatureOperator()
-model = loadmodel(hook_feature)
+
+if settings.INPUT_CONV:
+    model = loadmodel(hook_inputconv_feature)    
+else:
+    model = loadmodel(hook_feature)
 
 ############ STEP 1: feature extraction ###############
 features, maxfeature = fo.feature_extraction(model=model)
