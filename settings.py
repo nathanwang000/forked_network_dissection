@@ -1,10 +1,10 @@
 ######### global settings  #########
-INPUT_CONV = True                          # input convolution
-GPU = True                                 # running on GPU is highly suggested
-TEST_MODE = False                          # turning on the testmode means the code will run on a small dataset.
-CLEAN = False                              # set to "True" if you want to clean the temporary large files after generating result
-MODEL = 'alexnet'                          # model arch: resnet18, alexnet, resnet50, densenet161
-DATASET = 'imagenet' #'places365'                       # model trained on: places365 or imagenet
+INPUT_CONV = True                           # input convolution
+GPU = True                                  # running on GPU is highly suggested
+TEST_MODE = False                           # turning on the testmode means the code will run on a small dataset.
+CLEAN = False                               # set to "True" if you want to clean the temporary large files after generating result
+MODEL = 'alexnet'                           # model arch: resnet18, alexnet, resnet50, densenet161
+DATASET = 'imagenet' #'places365'           # model trained on: places365 or imagenet
 QUANTILE = 0.005                            # the threshold used for activation
 SEG_THRESHOLD = 0.04                        # the threshold used for visualization # never used in this codebase
 SCORE_THRESHOLD = 0.04                      # the threshold used for IoU score (in HTML file)
@@ -13,6 +13,15 @@ PARALLEL = 1                                # how many process is used for tally
 RF = 50                                     # receptive field size
 CATAGORIES = ["object", "part","scene","texture","color"] # concept categories that are chosen to detect: "object", "part", "scene", "material", "texture", "color"
 OUTPUT_FOLDER = "result/pytorch_"+MODEL+"_"+DATASET+"/"+(('T'+str(RF)) if INPUT_CONV else 'F') # result will be stored in this folder
+'''how to initialize concept
+'identity' for using its original basis * 
+'random' for random concept initialization *
+'broden' for broden concept initialization
+'supervise' for supervised learning and taking W' for concept initialization
+'W_trans' for taking last layer W' and complete W' for concept initialization *
+'ortho' for orthogonal concept initialization
+'''
+CONCEPT_INIT = 'identity'
 
 ########### sub settings ###########
 # In most of the case, you don't have to change them.

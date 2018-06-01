@@ -46,7 +46,8 @@ def fcn_forward(model, inp_var, feature_names=None,
     for name in feature_names:
 
         def CAM(inp):
-            # change receptive_field to size (w,h) of CAM to kernel size, inp is a pytorch variable
+            # change receptive_field to size (w,h) of CAM to kernel size,
+            # inp is a pytorch variable
             bs, c, w_in, h_in  = inp.shape
             # use pytorch bilinear interpolation, also only resize if needed
             if w_in != w or h_in != h:
@@ -55,7 +56,7 @@ def fcn_forward(model, inp_var, feature_names=None,
             out = model(inp) # doesn't need out
             m = getModule(model, name)
             out = m.output
-            if len(out.shape) > 1: # assumes have batch information
+            if len(out.shape) > 1: # assumes have batch dimension
                 out = out.reshape(out.shape[0], -1)
             return out
         
@@ -167,7 +168,7 @@ class FeatureOperator:
             # create 13x13 forward operations
             if settings.INPUT_CONV:
                 # todo: check if need deep copy
-                features_blobs.extend(fcn_forward(model, input_var))                                    
+                features_blobs.extend(fcn_forward(model, input_var))                
                 # im_np = convert_image_np(input_var.data)
                 # features_blobs.extend(forward_slide2d(model, im_np))
             
@@ -178,7 +179,7 @@ class FeatureOperator:
                 # create 13x13 forward operations
                 if settings.INPUT_CONV:
                     # todo: check if need deep copy
-                    features_blobs.extend(fcn_forward(model, input_var))                    
+                    features_blobs.extend(fcn_forward(model, input_var))   
                     # im_np = convert_image_np(input_var.data)
                     # features_blobs.extend(forward_slide2d(model, im_np))
                 
