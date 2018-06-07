@@ -10,9 +10,9 @@ SEG_THRESHOLD = 0.04                        # the threshold used for visualizati
 SCORE_THRESHOLD = 0.04                      # the threshold used for IoU score (in HTML file)
 TOPN = 10                                   # to show top N image with highest activation for each unit
 PARALLEL = 1                                # how many process is used for tallying (Experiments show that 1 is the fastest)
-RF = 50                                     # receptive field size
-CATAGORIES = ["object", "part","scene","texture","color"] # concept categories that are chosen to detect: "object", "part", "scene", "material", "texture", "color"
-OUTPUT_FOLDER = "result/pytorch_"+MODEL+"_"+DATASET+"/"+(('T'+str(RF)) if INPUT_CONV else 'F') # result will be stored in this folder
+RF = 224                                    # receptive field size
+CATAGORIES = ["object", "part","scene","texture","color","material"] # concept categories that are chosen to detect: "object", "part", "scene", "material", "texture", "color"
+
 '''how to initialize concept
 'identity' for using its original basis * 
 'random' for random concept initialization *
@@ -20,8 +20,22 @@ OUTPUT_FOLDER = "result/pytorch_"+MODEL+"_"+DATASET+"/"+(('T'+str(RF)) if INPUT_
 'supervise' for supervised learning and taking W' for concept initialization
 'W_trans' for taking last layer W' and complete W' for concept initialization *
 'ortho' for orthogonal concept initialization
+custom names use preloaded concept class with path specified CONCEPT_PATH *
 '''
-CONCEPT_INIT = 'identity'
+# this path is only used if concept-init uses custom names
+# alexnet init with random tiny imagenet (200 categories): '/data/jiaxuan/faithful_interpretation/webapp/basis/20180601062504.npy'
+# alexnet init with random broden dataset: 'basis/alexnet_broden_random_0.npy'
+# alexnet init with random broden dataset using dummy cat detector neuron 1145 'basis/dummy_1145.npy'
+##############***************** change both when used!!!!!!!!!!!!!!!!!!*****************#############################
+CONCEPT_INIT = 'random_broden1'
+CONCEPT_PATH = 'basis/alexnet_broden_random_1.npy'
+# solving for inverse or projection
+CONCEPT_PROJECT = True
+
+# result will be stored in this folder
+OUTPUT_FOLDER = "result/pytorch_" + MODEL + "_"+DATASET + "/" + \
+                (('T' + str(RF) + CONCEPT_INIT + ('_p' if CONCEPT_PROJECT else ''))
+                 if INPUT_CONV else 'F')
 
 ########### sub settings ###########
 # In most of the case, you don't have to change them.

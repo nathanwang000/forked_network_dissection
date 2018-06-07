@@ -23,6 +23,30 @@ def fix(s):
 
 
 
+def getRecords(ds, layer, maxfeature=None, features=None, thresholds=None,
+               imsize=None, imscale=72, tally_result=None,
+               gridwidth=None, gap=3, limit=None, force=False, verbose=False):
+    '''jiaxuan: based on generate html summary'''
+    ed = expdir.ExperimentDirectory(settings.OUTPUT_FOLDER)
+    print('getting records %s' % ed.filename('html/%s.html' % expdir.fn_safe(layer)))
+    # Grab tally stats
+    # bestcat_pciou, name_pciou, score_pciou, _, _, _, _ = (tally_stats)
+    if verbose:
+        print('Sorting units by score.')
+    if imsize is None:
+        imsize = settings.IMG_SIZE
+    top = np.argsort(maxfeature, 0)[:-1 - settings.TOPN:-1, :].transpose()
+    ed.ensure_dir('html','image')
+    html = [html_prefix]
+    rendered_order = []
+    barfn = 'image/%s-bargraph.svg' % (
+            expdir.fn_safe(layer))
+    bargraph.bar_graph_svg(ed, layer,
+                           tally_result=tally_result,
+                           rendered_order=rendered_order,
+                           save=ed.filename('html/' + barfn))
+    return rendered_order
+
 def generate_html_summary(ds, layer, maxfeature=None, features=None, thresholds=None,
         imsize=None, imscale=72, tally_result=None,
         gridwidth=None, gap=3, limit=None, force=False, verbose=False):
@@ -44,6 +68,7 @@ def generate_html_summary(ds, layer, maxfeature=None, features=None, thresholds=
                            tally_result=tally_result,
                            rendered_order=rendered_order,
                            save=ed.filename('html/' + barfn))
+
     html.extend([
         '<div class="histogram">',
         '<img class="img-fluid" src="%s" title="Summary of %s %s">' % (

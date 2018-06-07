@@ -21,21 +21,16 @@ def hook_inputconv_feature(module, input, output):
     # record last output
     module.output = output.data.cpu().numpy()
 
-def fcn_forward(model, inp_var, feature_names=None,
-                size=5, receptive_field=None): 
-    # use for fully connected layers, assumes 4d image
-    '''feature_names: layers to record heatmap
+def fcn_forward(model, inp_var, size=5, receptive_field=None): 
+    '''
+       # use for fully connected layers, assumes 4d image
        inp_var: image in pytorch format of shape (bs, c, w, h)
-       # im_np: image in numpy format of shape (bs, c, w, h)
-       return: a list of heatmaps in the same order as feature_names'''
+       return: a list of heatmaps in the same order as feature_names
+    '''
+
     heatmap_list = []
-    
-    # register names
-    if feature_names is None:
-        feature_names = settings.FEATURE_NAMES
-        for name in feature_names:
-            m = getModule(model, name)
-            m.register_forward_hook(hook_inputconv_feature)
+    feature_names = settings.FEATURE_NAMES
+
     # determine receptive_field
     if receptive_field is None:
         receptive_field = settings.RF
@@ -48,70 +43,29 @@ def fcn_forward(model, inp_var, feature_names=None,
         def CAM(inp):
             # change receptive_field to size (w,h) of CAM to kernel size,
             # inp is a pytorch variable
+            # out is bs x n_concepts np array
             bs, c, w_in, h_in  = inp.shape
             # use pytorch bilinear interpolation, also only resize if needed
             if w_in != w or h_in != h:
                 inp = bilinear_resize(inp, h, w)
             
-            out = model(inp) # doesn't need out
+            _ = model(inp) # doesn't need out
             m = getModule(model, name)
-            out = m.output
-            if len(out.shape) > 1: # assumes have batch dimension
-                out = out.reshape(out.shape[0], -1)
-            return out
+            phix = m.output
+            if len(phix.shape) > 1: # assumes have batch dimension
+                phix = phix.reshape(phix.shape[0], -1)
+
+            # note: this is slow            
+            if settings.CONCEPT_PROJECT: # projection
+                return phix.dot(m.P)
+            else:
+                return m.Pinv.dot(phix.T).T
         
         heatmap = slide2d_tensor(inp_var, (receptive_field, receptive_field), 
                                  pad=math.ceil((receptive_field-1)/2), 
                                  stride=math.floor((w-1)/size), 
                                  transform=CAM)
 
-        heatmap_list.append(heatmap)
-    
-    return heatmap_list
-
-def forward_slide2d(model, im_np, feature_names=None,
-                    size=5, receptive_field=100, pytorch_order=True): 
-    # use for fully connected layers, assumes 4d image
-    '''feature_names: layers to record heatmap
-       im_np: image in numpy format of shape (bs, w, h, c)
-       return: a list of heatmaps in the same order as feature_names'''
-    heatmap_list = []
-    
-    # register names
-    if feature_names is None:
-        feature_names = settings.FEATURE_NAMES
-        for name in feature_names:
-            m = getModule(model, name)
-            m.register_forward_hook(hook_inputconv_feature)
-    
-    # prepare slide2d
-    bs, w, h, c = im_np.shape
-    # todo: inefficient one pass is enough for all layers
-    for name in feature_names:
-
-        def CAM(inp):
-            # change receptive_field to size (w,h) of CAM to kernel size
-            bs, w_in, h_in, c = inp.shape
-            inp = cv2.resize(inp.reshape([w_in, h_in, bs*c]), (w,h))
-            inp = inp.reshape([bs,w,h,c])
-            
-            prep_img = convert_np2var(inp).cuda() # todo: inefficient, should always just do slide2d in pytorch
-            out = model(prep_img)
-            m = getModule(model, name)
-            out = m.output
-            if len(out.shape) > 1: 
-                if len(prep_img.shape) == 3: # no batch
-                    out = out.ravel()
-                else: # has batch
-                    out = out.reshape(out.shape[0], -1)
-            return out
-        
-        heatmap = slide2d(im_np, (receptive_field, receptive_field), 
-                          pad=math.ceil((receptive_field-1)/2), 
-                          stride=math.floor((w-1)/size), 
-                          transform=CAM)
-        if pytorch_order:
-            heatmap = heatmap.transpose((0,3,1,2)) # (bs, c, w, h)
         heatmap_list.append(heatmap)
     
     return heatmap_list
@@ -125,6 +79,30 @@ class FeatureOperator:
         self.loader = SegmentationPrefetcher(self.data,categories=['image'],once=True,batch_size=settings.BATCH_SIZE)
         self.mean = [109.5388,118.6897,124.6901]
 
+    def init_concept_matrix(self, model, mode):
+        '''how to initialize concept, see settings.CONCEPT_INIT'''
+        print('initializing concepts with mode %s' % mode)
+        # make a fake image to gauge how many concepts to generate
+        s = settings.IMG_SIZE
+        input_var = V(torch.zeros([1, 3, s, s]))
+        if settings.GPU:
+            input_var = input_var.cuda()
+        _  = model(input_var)
+        
+        for name in settings.FEATURE_NAMES:
+            m = getModule(model, name)
+            out = m.output # (bs x c x h x w)
+            n_concepts = out.shape[1]
+            
+            if mode is 'identity':
+                m.P = np.identity(n_concepts)
+                m.Pinv = m.P
+            else: # try to load the file, assume npy file
+                print('custom class %s' %  mode)
+                print('loading basis path from %s' % settings.CONCEPT_PATH)
+                m.P = np.load(settings.CONCEPT_PATH)
+                m.Pinv = np.linalg.pinv(m.P)
+        
     def feature_extraction(self, model=None, memmap=True):
         loader = self.loader
         # extract the max value activaiton for each image
@@ -152,6 +130,9 @@ class FeatureOperator:
             if skip:
                 return wholefeatures, maxfeatures
 
+        # init concept matrix
+        self.init_concept_matrix(model, settings.CONCEPT_INIT)
+        
         num_batches = (len(loader.indexes) + loader.batch_size - 1) / loader.batch_size
         for batch_idx,batch in enumerate(loader.tensor_batches(bgr_mean=self.mean)):
             del features_blobs[:] # clear all content of feature blob

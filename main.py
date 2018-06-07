@@ -7,10 +7,10 @@ from util.clean import clean
 fo = FeatureOperator()
 
 if settings.INPUT_CONV:
-    model = loadmodel(hook_inputconv_feature)    
+    model = loadmodel(hook_inputconv_feature)
 else:
     model = loadmodel(hook_feature)
-
+    
 ############ STEP 1: feature extraction ###############
 features, maxfeature = fo.feature_extraction(model=model)
 
